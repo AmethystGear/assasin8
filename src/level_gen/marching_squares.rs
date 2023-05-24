@@ -151,7 +151,11 @@ pub fn marching_squares(tiles: &Tiles) -> (Vec<Vec3>, Vec<Vec3>) {
 
                 let l = rel_loc * tiles.dist_between_nodes() + tile_location;
                 let l = Vec3::new(l.x as f32, -l.y as f32, 0.0);
-                if !neighbors.into_iter().all(|x| get_ruleset_and_map_id(loc + x, tiles).1 == 15) {
+                let empty_nearby = neighbors.into_iter().any(|x| {
+                    let (ruleset, map_id) = get_ruleset_and_map_id(loc + x, tiles);
+                    ruleset == 1 && map_id != 15
+                });
+                if (ruleset == 1 && map_id == 15 && empty_nearby) || (ruleset == 0 && map_id != 15) {
                     collision_vertices.push(l);
                 }
                 vertices.push(l);

@@ -1,20 +1,19 @@
 use std::time::SystemTime;
 
 use bevy::{
-    prelude::{shape::RegularPolygon, *},
-    render::{mesh::Indices, render_resource::PrimitiveTopology, camera::Viewport},
-    sprite::{MaterialMesh2dBundle, Material2d},
+    prelude::*,
+    render::{mesh::Indices, render_resource::PrimitiveTopology},
+    sprite::MaterialMesh2dBundle,
     transform::TransformSystem,
-    window::CursorGrabMode, core_pipeline::{core_2d::graph::node::FXAA, fxaa::FxaaPlugin}, 
+    window::CursorGrabMode,
 };
 use bevy_prototype_lyon::prelude::*;
 use bevy_rapier2d::prelude::*;
-use level_gen::{matrix::Matrix, point::Point, marching_squares::marching_squares, tiles::Tiles};
-use rand::random;
+use level_gen::{marching_squares::marching_squares, matrix::Matrix, point::Point, tiles::Tiles};
 use noise::{Fbm, NoiseFn, Simplex};
 
-
 mod level_gen;
+mod lighting;
 
 fn main() {
     App::new()
@@ -39,7 +38,6 @@ fn main() {
 struct Player {
     speed: f32,
     drag: f32,
-    alive: bool,
     visibility: f32,
     last_moved_time: SystemTime,
 }
@@ -62,7 +60,7 @@ fn grab_mouse(
     }
 }
 
-const CAMERA_ZOOM : f32 = 0.5;
+const CAMERA_ZOOM: f32 = 0.5;
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
@@ -134,7 +132,6 @@ fn setup_player(
     let player = Player {
         speed: 7.0,
         drag: 0.02,
-        alive: true,
         visibility: 1.0,
         last_moved_time: SystemTime::now(),
     };
@@ -165,7 +162,13 @@ fn player_control(
     keyboard: Res<Input<KeyCode>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut windows: Query<&Window>,
-    mut query: Query<(&mut ExternalImpulse, &mut Transform, &Velocity, &mut Player, &Handle<ColorMaterial>)>,
+    mut query: Query<(
+        &mut ExternalImpulse,
+        &mut Transform,
+        &Velocity,
+        &mut Player,
+        &Handle<ColorMaterial>,
+    )>,
 ) {
     let (mut impulse, mut transform, vel, mut player, material_handle) = query.single_mut();
     // movement
@@ -206,8 +209,8 @@ fn player_control(
         transform.rotation = Quat::from_rotation_z(angle);
     }
 
-    // turn player invisible after not moving for 2 seconds. fade out over 2 seconds, and instantly become visible 
-    // as soon as the player moves. 
+    // turn player invisible after not moving for 2 seconds. fade out over 2 seconds, and instantly become visible
+    // as soon as the player moves.
     if let Ok(duration) = SystemTime::now().duration_since(player.last_moved_time) {
         if duration.as_millis() < 2000 {
             player.visibility = 1.0;
@@ -220,13 +223,10 @@ fn player_control(
     }
 }
 
-fn verts_to_mesh(verts : Vec<Vec3>) -> Mesh {
+fn verts_to_mesh(verts: Vec<Vec3>) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
     let num_verts = verts.len() as u32;
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_POSITION,
-        verts
-    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, verts);
     mesh.set_indices(Some(Indices::U32((0..num_verts).collect())));
     mesh
 }
@@ -240,8 +240,8 @@ fn setup_env(
     let mut matrix = Matrix::new([100, 100]);
     for y in 0..matrix.dim()[1] {
         for x in 0..matrix.dim()[0] {
-
-            let pt = Point::new(x as f64, y as f64) / Point::new(matrix.dim()[0] as f64, matrix.dim()[1] as f64);
+            let pt = Point::new(x as f64, y as f64)
+                / Point::new(matrix.dim()[0] as f64, matrix.dim()[1] as f64);
             let z = fbm.get([pt.x, pt.y]);
             if z < 0.0 {
                 matrix.set([x, y], -1);
@@ -261,6 +261,6 @@ fn setup_env(
             mesh: meshes.add(mesh).into(),
             material: materials.add(ColorMaterial::from(Color::BLACK)),
             ..default()
-        }
+        },
     ));
 }
