@@ -10,6 +10,7 @@ use bevy::{
 use bevy_prototype_lyon::prelude::*;
 use bevy_rapier2d::prelude::*;
 use level_gen::{marching_squares::marching_squares, matrix::Matrix, point::Point, tiles::Tiles};
+use lighting::light::ShadowRenderPass;
 use noise::{Fbm, NoiseFn, Simplex};
 
 mod level_gen;
@@ -19,6 +20,7 @@ fn main() {
     App::new()
         .insert_resource(Msaa::Off)
         .add_plugins(DefaultPlugins)
+        .add_plugin(ShadowRenderPass)
         .add_plugin(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         .add_plugin(ShapePlugin)
         .add_startup_system(setup_player)
@@ -33,6 +35,9 @@ fn main() {
         )
         .run();
 }
+
+
+
 
 #[derive(Component)]
 struct Player {

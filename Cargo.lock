@@ -3249,6 +3249,7 @@ dependencies = [
  "bevy_prototype_lyon",
  "bevy_rapier2d",
  "bimap",
+ "encase",
  "itertools",
  "lazy_static",
  "noise",
