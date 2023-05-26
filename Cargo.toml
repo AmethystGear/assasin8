@@ -19,3 +19,8 @@ bimap = "0.6.3"
 itertools = "0.10.5"
 noise = "0.8.2"
 encase = "0.5"
+wgpu = "0.15.0"
+bytemuck = { version = "1.4", features = ["derive"] }
+futures = "0.3.28"
+futures-intrusive = "0.4"
+image = "0.24.6"

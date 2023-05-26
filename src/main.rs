@@ -3,14 +3,20 @@ use std::time::SystemTime;
 use bevy::{
     prelude::*,
     render::{mesh::Indices, render_resource::PrimitiveTopology},
-    sprite::MaterialMesh2dBundle,
+    sprite::{MaterialMesh2dBundle, Mesh2dHandle},
     transform::TransformSystem,
-    window::CursorGrabMode,
+    window::{CursorGrabMode, PrimaryWindow},
 };
 use bevy_prototype_lyon::prelude::*;
 use bevy_rapier2d::prelude::*;
 use level_gen::{marching_squares::marching_squares, matrix::Matrix, point::Point, tiles::Tiles};
-use lighting::light::ShadowRenderPass;
+
+use lighting::{
+    light::WGPUState,
+    types::{
+        light_source_to_light_data, shadow_caster_to_occlusion_data, LightSource, ShadowCaster,
+    },
+};
 use noise::{Fbm, NoiseFn, Simplex};
 
 mod level_gen;
@@ -20,14 +26,15 @@ fn main() {
     App::new()
         .insert_resource(Msaa::Off)
         .add_plugins(DefaultPlugins)
-        .add_plugin(ShadowRenderPass)
         .add_plugin(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         .add_plugin(ShapePlugin)
+        .init_resource::<WGPUState>()
         .add_startup_system(setup_player)
         .add_startup_system(setup_camera)
         .add_startup_system(setup_env)
         .add_system(player_control)
         .add_system(grab_mouse)
+        .add_system(lights)
         .add_system(
             camera_follow
                 .in_base_set(CoreSet::PostUpdate)
@@ -36,14 +43,25 @@ fn main() {
         .run();
 }
 
-
-
+fn lights(
+    camera: Query<&Transform, With<Camera>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    wgpu_state: Res<WGPUState>,
+    shadow_casters: Query<(&Transform, &ShadowCaster)>,
+    lights: Query<(&Transform, &LightSource)>,
+) {
+    let lights = lights.iter().map(light_source_to_light_data).collect();
+    let occlusions = shadow_casters
+        .iter()
+        .flat_map(shadow_caster_to_occlusion_data)
+        .collect();
+    lighting::light::get_lightmap(window, &lights, &occlusions, camera.single(), wgpu_state)
+}
 
 #[derive(Component)]
 struct Player {
     speed: f32,
     drag: f32,
-    visibility: f32,
     last_moved_time: SystemTime,
 }
 
@@ -53,7 +71,6 @@ fn grab_mouse(
     key: Res<Input<KeyCode>>,
 ) {
     let mut window = windows.single_mut();
-
     if mouse.just_pressed(MouseButton::Left) {
         window.cursor.visible = false;
         window.cursor.grab_mode = CursorGrabMode::Locked;
@@ -65,7 +82,6 @@ fn grab_mouse(
     }
 }
 
-const CAMERA_ZOOM: f32 = 0.5;
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
@@ -77,7 +93,6 @@ fn camera_follow(
     let player = players.single();
     let (mut transform, mut projection) = cameras.single_mut();
     transform.translation = player.translation;
-    projection.scale = CAMERA_ZOOM;
 }
 
 /// generates the player's mesh
@@ -110,14 +125,7 @@ fn player_mesh() -> Mesh {
 /// converts a bevy mesh into a rapier2d trimesh collider
 fn mesh_to_collider(mesh: &Mesh) -> Collider {
     let ind: Vec<_> = mesh.indices().unwrap().iter().collect();
-    let vertices: Vec<_> = mesh
-        .attribute(Mesh::ATTRIBUTE_POSITION)
-        .unwrap()
-        .as_float3()
-        .unwrap()
-        .iter()
-        .map(|[x, y, _]| (*x, *y).into())
-        .collect();
+    let vertices = get_mesh_verts(mesh);
     let mut indices = vec![];
     for i in 0..ind.len() / 3 {
         indices.push([
@@ -129,6 +137,28 @@ fn mesh_to_collider(mesh: &Mesh) -> Collider {
     Collider::trimesh(vertices, indices)
 }
 
+fn get_mesh_verts(mesh: &Mesh) -> Vec<Vec2> {
+    mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        .unwrap()
+        .as_float3()
+        .unwrap()
+        .iter()
+        .map(|[x, y, _]| (*x, *y).into())
+        .collect()
+}
+
+fn mesh_to_verts(mesh: &Mesh) -> Vec<Vec2> {
+    let ind: Vec<_> = mesh.indices().unwrap().iter().collect();
+    let vertices = get_mesh_verts(mesh);
+    let mut verts = vec![];
+    for i in 0..ind.len() / 3 {
+        verts.push(vertices[ind[i * 3]]);
+        verts.push(vertices[ind[i * 3 + 1]]);
+        verts.push(vertices[ind[i * 3 + 2]]);
+    }
+    verts
+}
+
 fn setup_player(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -137,7 +167,6 @@ fn setup_player(
     let player = Player {
         speed: 7.0,
         drag: 0.02,
-        visibility: 1.0,
         last_moved_time: SystemTime::now(),
     };
 
@@ -152,6 +181,10 @@ fn setup_player(
         Friction::coefficient(0.0),
         LockedAxes::ROTATION_LOCKED,
         ActiveEvents::COLLISION_EVENTS,
+        ShadowCaster {
+            verts: mesh_to_verts(&mesh),
+            visibility: 1.0,
+        },
         MaterialMesh2dBundle {
             mesh: meshes.add(mesh).into(),
             material: materials.add(ColorMaterial::from(Color::WHITE)),
@@ -173,9 +206,11 @@ fn player_control(
         &Velocity,
         &mut Player,
         &Handle<ColorMaterial>,
+        &mut ShadowCaster,
     )>,
 ) {
-    let (mut impulse, mut transform, vel, mut player, material_handle) = query.single_mut();
+    let (mut impulse, mut transform, vel, mut player, material_handle, mut shadow_caster) =
+        query.single_mut();
     // movement
     let mut moving = false;
     let mut dir = Vec2::new(0.0, 0.0);
@@ -218,13 +253,14 @@ fn player_control(
     // as soon as the player moves.
     if let Ok(duration) = SystemTime::now().duration_since(player.last_moved_time) {
         if duration.as_millis() < 2000 {
-            player.visibility = 1.0;
+            shadow_caster.visibility = 1.0;
         } else {
-            player.visibility = (1.0 - ((duration.as_millis() - 2000) as f32 / 2000.0)).max(0.0);
+            shadow_caster.visibility =
+                (1.0 - ((duration.as_millis() - 2000) as f32 / 2000.0)).max(0.0);
         }
     }
     if let Some(mat) = materials.get_mut(material_handle) {
-        mat.color.set_a(player.visibility);
+        mat.color.set_a(shadow_caster.visibility);
     }
 }
 
@@ -258,13 +294,41 @@ fn setup_env(
     let tiles = Tiles::new(matrix, 20.0);
     let (verts, coll_verts) = marching_squares(&tiles);
     let mesh = verts_to_mesh(verts);
-    let coll_mesh = verts_to_mesh(coll_verts);
+    let coll_mesh = verts_to_mesh(coll_verts.clone());
     commands.spawn((
         RigidBody::Fixed,
         mesh_to_collider(&coll_mesh),
         MaterialMesh2dBundle {
             mesh: meshes.add(mesh).into(),
             material: materials.add(ColorMaterial::from(Color::BLACK)),
+            ..default()
+        },
+        ShadowCaster {
+            verts: coll_verts.iter().map(|x| Vec2::new(x.x, x.y)).collect(),
+            visibility: 1.0,
+        },
+    ));
+
+
+
+    commands.spawn((
+        LightSource {
+            intensity: 0.3,
+            color: Color::RED,
+        },
+        TransformBundle {
+            local: Transform::from_translation(Vec3::new(40.0, -300.0, 1.0)),
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        LightSource {
+            intensity: 0.3,
+            color: Color::BLUE,
+        },
+        TransformBundle {
+            local: Transform::from_translation(Vec3::new(100.0, -400.0, 1.0)),
             ..default()
         },
     ));

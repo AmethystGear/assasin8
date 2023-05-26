@@ -1,3 +1,2 @@
-mod types;
-mod pipeline;
+pub mod types;
 pub mod light;
